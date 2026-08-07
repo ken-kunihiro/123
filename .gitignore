@@ -16,3 +16,6 @@ invoice_result.csv
 
 # セキュリティひな形のsetup.shが生成する、パス置換済みの設定断片
 .claude/settings.security.merged.json
+
+# 帳簿レビュー結果（取引先名・金額が入るため、非公開リポジトリでもコミットしない）
+月次レビュー_*.md
