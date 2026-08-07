@@ -1,0 +1,18 @@
+# 秘密情報・認証トークンは絶対にGitHubへ上げない
+.env
+token.json
+
+# Pythonの一時ファイル
+__pycache__/
+*.pyc
+
+# スクリプトの出力結果（都度生成されるもの）
+result.csv
+invoice_result.csv
+
+# 練習で置いた請求書PDF（フォルダの中身。.gitkeepは残す）
+第3回_freeeオート経理/請求書PDFを置く場所/*
+!第3回_freeeオート経理/請求書PDFを置く場所/.gitkeep
+
+# セキュリティひな形のsetup.shが生成する、パス置換済みの設定断片
+.claude/settings.security.merged.json
