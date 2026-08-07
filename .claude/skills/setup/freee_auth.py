@@ -1,31 +1,37 @@
 # -*- coding: utf-8 -*-
 """
-freee認証モジュール（体験版）
+freee認証モジュール（体験版・ブラウザ手動コピー方式／OOB）
 
 freee APIを使うには「アクセストークン」が必要です。
-このファイルは、ブラウザでfreeeにログインして許可すると、
-トークンを token.json に保存する処理をまとめたものです。
+このファイルは、ブラウザでfreeeにログインして許可すると表示される
+「認可コード」を貼り付けてもらい、トークンを token.json に保存する
+処理をまとめたものです（クラウド実行環境でも動くよう、ローカルサーバーで
+コールバックを待ち受ける方式ではなく、OOB＝コードを画面に表示して
+手動コピーする方式にしています）。
 
-■ 初回の認証（当日一緒にやります）:
-    python .claude/skills/setup/freee_auth.py
-
-    → ブラウザが開くので、freeeにログインして「許可する」を押すと
-      キットの一番上のフォルダに token.json が作られます。
-      以降は auto_keiri.py などが自動で使います。
+■ 初回の認証（当日一緒にやります・2ステップ）:
+    1) python .claude/skills/setup/freee_auth.py
+       → 認証用URLが表示されるので、ブラウザで開いてfreeeにログインし
+         「許可する」を押してください。画面に認可コードが表示されます。
+    2) python .claude/skills/setup/freee_auth.py --code <表示されたコード>
+       → キットの一番上のフォルダに token.json が作られます。
+         以降は auto_keiri.py などが自動で使います。
 
 ■ 事業所ID（company_id）の一覧を見たいとき:
     python .claude/skills/setup/freee_auth.py --companies
+    （初回認証が済んでいる必要があります）
 
 ■ 他のスクリプト（auto_keiri.py / invoice_ocr.py）は、このファイルの
   get_access_token() を呼ぶだけでトークンを受け取れます。
-  （期限切れなら自動でリフレッシュ、リフレッシュ不可なら再認証します）
+  （期限切れなら自動でリフレッシュ。リフレッシュ不可なら、このファイルを
+  上記の2ステップで実行し直すよう案内が出ます）
 
 ------------------------------------------------------------------------
 【重要】freeeアプリ側の「コールバックURL」設定について
 ------------------------------------------------------------------------
 freeeアプリの管理画面で、コールバックURLに次の値を"完全一致"で登録してください:
 
-    http://127.0.0.1:8088/callback
+    urn:ietf:wg:oauth:2.0:oob
 
 1文字でも違うと認証がエラーになります。README.mdの手順も参照してください。
 """
@@ -34,10 +40,7 @@ import os
 import sys
 import json
 import time
-import secrets
-import webbrowser
 import urllib.parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import requests
 from dotenv import load_dotenv
@@ -62,9 +65,8 @@ TOKEN_URL = "https://accounts.secure.freee.co.jp/public_api/token"
 API_BASE = "https://api.freee.co.jp/api/1"
 
 # --- 認証の受け取り口（freeeアプリのコールバックURLと完全一致させること）---
-CALLBACK_HOST = "127.0.0.1"
-CALLBACK_PORT = 8088
-REDIRECT_URI = f"http://{CALLBACK_HOST}:{CALLBACK_PORT}/callback"
+# OOB方式: ローカルサーバーで待ち受けず、freee側の画面にコードを表示してもらう
+REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 
 # --- トークンの保存先（キットの一番上のフォルダの token.json）------------
 # スキルごとにスクリプトが分かれているので、全スキルが同じ1つのトークンを
@@ -89,32 +91,6 @@ def _client_secret() -> str:
     if _is_placeholder(v):
         raise SystemExit("FREEE_CLIENT_SECRET が未設定（またはひな形のまま）です。.env を確認してください。")
     return v
-
-
-class _CallbackHandler(BaseHTTPRequestHandler):
-    """ブラウザからのリダイレクトを1回だけ受け取る簡易サーバー"""
-    result = {}
-
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path != "/callback":
-            self.send_response(404)
-            self.end_headers()
-            return
-        params = urllib.parse.parse_qs(parsed.query)
-        _CallbackHandler.result = {k: v[0] for k, v in params.items()}
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(
-            "<html><body style='font-family:sans-serif'>"
-            "<h2>認証が完了しました。</h2>"
-            "<p>このタブを閉じて、コマンド画面に戻ってください。</p>"
-            "</body></html>".encode("utf-8")
-        )
-
-    def log_message(self, *args):
-        pass  # サーバーのアクセスログは出さない
 
 
 def _save_token(data: dict) -> None:
@@ -162,33 +138,27 @@ def _refresh_access_token(refresh_token: str) -> dict:
     return resp.json()
 
 
-def authorize() -> str:
-    """ブラウザでの初回認証を行い、アクセストークンを返す"""
-    state = secrets.token_urlsafe(32)
+def authorize_step1() -> str:
+    """認証用URLを表示するだけ（OOB方式。コードはユーザーが画面から手動コピーする）"""
     query = urllib.parse.urlencode({
         "client_id": _client_id(),
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
-        "state": state,
     })
     url = f"{AUTHORIZE_URL}?{query}"
 
-    print("ブラウザで認証ページを開きます。freeeにログインして「許可する」を押してください。")
-    print("（自動で開かない場合は、次のURLを手動でブラウザに貼ってください）")
+    print("次のURLをブラウザで開いて、freeeにログインし「許可する」を押してください。")
     print(url)
+    print()
+    print("ログイン後の画面に表示される「認可コード」をコピーして、")
+    print("次のコマンドで --code に貼り付けて実行してください:")
+    print("  python .claude/skills/setup/freee_auth.py --code <ここに認可コード>")
+    return url
 
-    server = HTTPServer((CALLBACK_HOST, CALLBACK_PORT), _CallbackHandler)
-    webbrowser.open(url)
-    server.handle_request()  # コールバックを1回だけ受け取る
-    server.server_close()
 
-    result = _CallbackHandler.result
-    if result.get("state") != state:
-        raise SystemExit("認証エラー: stateが一致しません。もう一度やり直してください。")
-    if "code" not in result:
-        raise SystemExit(f"認証エラー: 認可コードを受け取れませんでした。応答={result}")
-
-    token_data = _exchange_code(result["code"])
+def authorize_step2(code: str) -> str:
+    """ユーザーが貼り付けた認可コードをアクセストークンに交換する"""
+    token_data = _exchange_code(code)
     _save_token(token_data)
     print("認証に成功しました。token.json を保存しました。")
     return token_data["access_token"]
@@ -198,7 +168,8 @@ def get_access_token() -> str:
     """
     有効なアクセストークンを返す。
     1) token.json があればリフレッシュを試す
-    2) だめなら（または無ければ）ブラウザ認証をやり直す
+    2) だめなら（または無ければ）再認証の手順を案内して終了する
+       （このファイルを直接、--code 付きで実行し直してください）
     """
     token = _load_token()
     if token and token.get("refresh_token"):
@@ -207,8 +178,13 @@ def get_access_token() -> str:
             _save_token(new_token)
             return new_token["access_token"]
         except requests.HTTPError:
-            print("トークンの更新に失敗しました。再認証します。")
-    return authorize()
+            print("トークンの更新に失敗しました。再認証が必要です。")
+    authorize_step1()
+    raise SystemExit(
+        "再認証が必要です。上のURLで認証し、\n"
+        "  python .claude/skills/setup/freee_auth.py --code <認可コード>\n"
+        "を実行してから、もう一度お試しください。"
+    )
 
 
 # --- freee APIを呼ぶための小さな共通関数（他スクリプトからも使う）--------
@@ -240,7 +216,14 @@ def freee_post(path: str, token: str, body: dict) -> dict:
 
 
 if __name__ == "__main__":
-    if "--companies" in sys.argv:
+    if "--code" in sys.argv:
+        # 手順2: 認可コードをアクセストークンに交換する
+        idx = sys.argv.index("--code")
+        if idx + 1 >= len(sys.argv):
+            raise SystemExit("--code の後に認可コードを指定してください。")
+        authorize_step2(sys.argv[idx + 1])
+        print("準備OKです。次は auto_keiri.py を試してみましょう。")
+    elif "--companies" in sys.argv:
         # 事業所ID（company_id）の一覧を表示する
         tok = get_access_token()
         data = freee_get("/companies", tok)
@@ -249,6 +232,14 @@ if __name__ == "__main__":
             print(f"  company_id={c['id']}  {c.get('display_name', '')}")
         print("↑ このうち、練習で使う事業所のIDを .env の FREEE_COMPANY_ID に設定してください。")
     else:
-        # 初回認証（token.json を作る）
-        get_access_token()
-        print("準備OKです。次は auto_keiri.py を試してみましょう。")
+        # 手順1: 認証用URLを表示する（初回、またはリフレッシュ失敗時）
+        token = _load_token()
+        if token and token.get("refresh_token"):
+            try:
+                new_token = _refresh_access_token(token["refresh_token"])
+                _save_token(new_token)
+                print("トークンは有効です（自動更新しました）。準備OKです。")
+                sys.exit(0)
+            except requests.HTTPError:
+                print("トークンの更新に失敗しました。再認証します。")
+        authorize_step1()
