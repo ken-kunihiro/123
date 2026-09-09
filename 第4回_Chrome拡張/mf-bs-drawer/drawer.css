@@ -1,0 +1,557 @@
+/*
+ * MF BSサイドドロワー - スタイル
+ *
+ * 00_master/rules/design.md のAppleスタイル準拠：
+ * 塗り#0071e3 / リンク#0066cc / 角丸はpillと8pxの2種のみ / シャドウ禁止 /
+ * font-weightは600上限 / 最小14px。
+ * MF会計がライト基調のみなので、ドロワーもライト固定にしている。
+ */
+
+#hkmf-root {
+  --hkmf-blue: #0071e3;
+  --hkmf-link: #0066cc;
+  --hkmf-text: #1d1d1f;
+  --hkmf-sub: #6e6e73;
+  --hkmf-faint: #86868b;
+  --hkmf-canvas: #f5f5f7;
+  --hkmf-surface: #ffffff;
+  --hkmf-hairline: #d2d2d7;
+  --hkmf-hairline-soft: #e8e8ed;
+  --hkmf-ice: #f0f6fc;
+
+  font-family: "SF Pro Text", -apple-system, "Segoe UI", "Hiragino Sans", "Meiryo UI", sans-serif;
+  color: var(--hkmf-text);
+}
+
+#hkmf-root *,
+#hkmf-root *::before,
+#hkmf-root *::after {
+  box-sizing: border-box;
+}
+
+/* ===== 開閉ハンドル（閉じているとき右端に出る縦タブ） ===== */
+.hkmf-handle {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 2147483000;
+  width: 30px;
+  padding: 14px 0;
+  border: 1px solid var(--hkmf-hairline);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--hkmf-surface);
+  color: var(--hkmf-link);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: 0;
+  cursor: pointer;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+}
+
+.hkmf-handle:hover {
+  background: var(--hkmf-ice);
+}
+
+.hkmf-handle[hidden] {
+  display: none !important;
+}
+
+/* ===== ドロワー本体 ===== */
+/*
+ * 幅は html 要素の --hkmf-w（content.js が設定・chrome.storage.local に保存）で決まる。
+ * 変数が無い状態（拡張の読み込み直後など）でも困らないよう既定値380pxを持たせている。
+ */
+.hkmf-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  width: var(--hkmf-w, 380px);
+  height: 100vh;
+  background: var(--hkmf-canvas);
+  border-left: 1px solid var(--hkmf-hairline);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.hkmf-drawer[hidden] {
+  display: none !important;
+}
+
+/* 本文を押し出すモード（既定）。ドロワーの幅を変えたら押し出し量も追従する */
+html.hkmf-pushed body {
+  padding-right: var(--hkmf-w, 380px) !important;
+  box-sizing: border-box !important;
+}
+
+/* ===== 幅を変えるつまみ（ドロワー左端） ===== */
+.hkmf-grip {
+  position: absolute;
+  top: 0;
+  left: -3px;
+  width: 9px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.hkmf-grip::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 3px;
+  width: 3px;
+  height: 100%;
+  background: transparent;
+}
+
+.hkmf-grip:hover::before,
+.hkmf-grip.hkmf-gripping::before {
+  background: var(--hkmf-blue);
+}
+
+/* ドラッグ中はMFの表のテキストを選択してしまわないようにする */
+html.hkmf-resizing,
+html.hkmf-resizing body {
+  user-select: none !important;
+  cursor: col-resize !important;
+}
+
+/* 明細一覧のある画面（/transaction_journals）の ca-container は min-width:1360px の固定幅で、
+   body の padding だけでは縮まずドロワーの下に潜り込む（右端の「登録」ボタン列が触れなくなる）。
+   min-width を外すと素直に縮み、はみ出た列は .ca-main-container の
+   overflow-x: auto による内部横スクロールで届く。 */
+html.hkmf-pushed div.ca-container {
+  min-width: 0 !important;
+  width: auto !important;
+}
+
+/* ===== ヘッダー ===== */
+.hkmf-head {
+  flex: none;
+  padding: 12px 14px 10px;
+  background: var(--hkmf-surface);
+  border-bottom: 1px solid var(--hkmf-hairline);
+}
+
+.hkmf-titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.hkmf-title {
+  flex: 1;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.016em;
+}
+
+.hkmf-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 980px;
+  background: transparent;
+  color: var(--hkmf-sub);
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hkmf-close:hover {
+  background: var(--hkmf-canvas);
+  color: var(--hkmf-text);
+}
+
+.hkmf-meta {
+  margin: 4px 0 0;
+  color: var(--hkmf-sub);
+  font-size: 14px;
+}
+
+.hkmf-company {
+  color: var(--hkmf-faint);
+}
+
+.hkmf-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.hkmf-search {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--hkmf-hairline);
+  border-radius: 8px;
+  background: var(--hkmf-surface);
+  color: var(--hkmf-text);
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.hkmf-search:focus {
+  outline: 2px solid var(--hkmf-link);
+  outline-offset: -1px;
+}
+
+.hkmf-btn {
+  flex: none;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--hkmf-hairline);
+  border-radius: 980px;
+  background: var(--hkmf-surface);
+  color: var(--hkmf-link);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hkmf-btn:hover {
+  background: var(--hkmf-ice);
+}
+
+.hkmf-btn[aria-pressed="true"] {
+  border-color: var(--hkmf-blue);
+  background: var(--hkmf-blue);
+  color: #fff;
+}
+
+/* ===== 通知・警告 ===== */
+.hkmf-notice {
+  flex: none;
+  margin: 0;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hkmf-hairline-soft);
+  background: var(--hkmf-ice);
+  color: var(--hkmf-text);
+  font-size: 14px;
+}
+
+.hkmf-notice[hidden] {
+  display: none !important;
+}
+
+.hkmf-notice.hkmf-warn {
+  background: #fff4e5;
+}
+
+/* ===== 一覧 ===== */
+.hkmf-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 0 20px;
+}
+
+.hkmf-group {
+  margin: 0 0 10px;
+  background: var(--hkmf-surface);
+  border-top: 1px solid var(--hkmf-hairline-soft);
+  border-bottom: 1px solid var(--hkmf-hairline-soft);
+}
+
+.hkmf-group[hidden] {
+  display: none !important;
+}
+
+.hkmf-grouphead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 14px 6px;
+  border-bottom: 1px solid var(--hkmf-hairline-soft);
+  background: var(--hkmf-canvas);
+}
+
+.hkmf-groupname {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.016em;
+}
+
+.hkmf-groupsum {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.hkmf-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  border-top: 1px solid var(--hkmf-hairline-soft);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hkmf-group .hkmf-row:first-of-type {
+  border-top: none;
+}
+
+.hkmf-row:hover {
+  background: var(--hkmf-canvas);
+}
+
+.hkmf-row[hidden] {
+  display: none !important;
+}
+
+.hkmf-row.hkmf-hit {
+  background: var(--hkmf-ice);
+  box-shadow: inset 3px 0 0 var(--hkmf-blue);
+}
+
+.hkmf-caret {
+  flex: none;
+  width: 12px;
+  color: var(--hkmf-faint);
+  font-size: 14px;
+}
+
+.hkmf-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.hkmf-amount {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.hkmf-amount.hkmf-zero {
+  color: var(--hkmf-faint);
+}
+
+/* ===== 内訳 ===== */
+/* 金額列はnowrapなので、ドロワーを狭くしたときは内訳だけ横スクロールで逃がす */
+.hkmf-breakdown {
+  padding: 8px 14px 12px;
+  border-top: 1px solid var(--hkmf-hairline-soft);
+  background: var(--hkmf-canvas);
+  overflow-x: auto;
+}
+
+.hkmf-breakdown[hidden] {
+  display: none !important;
+}
+
+.hkmf-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.hkmf-tab {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--hkmf-hairline);
+  border-radius: 980px;
+  background: var(--hkmf-surface);
+  color: var(--hkmf-link);
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.hkmf-tab[aria-selected="true"] {
+  border-color: var(--hkmf-blue);
+  background: var(--hkmf-blue);
+  color: #fff;
+}
+
+/*
+ * MFのページCSSが table に table-layout: fixed を当てている。そのままだと
+ * 金額列（width:1%）が実測6pxまで潰され、数字がセルの外へ出て見えなくなる。
+ * ここは中身に合わせて列幅を決めてほしいので auto に戻す。
+ */
+.hkmf-bdtable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  table-layout: auto !important;
+}
+
+.hkmf-bdtable td {
+  padding: 4px 0;
+  border-top: 1px solid var(--hkmf-hairline-soft);
+  vertical-align: baseline;
+}
+
+.hkmf-bdtable tr:first-child td {
+  border-top: none;
+}
+
+.hkmf-bdtable td:last-child {
+  width: 1%;
+  padding-left: 8px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hkmf-bdtable .hkmf-bdnone {
+  color: var(--hkmf-faint);
+}
+
+/* ===== 内訳行のドリルダウン ===== */
+.hkmf-bdrow {
+  cursor: pointer;
+}
+
+.hkmf-bdrow:hover {
+  background: var(--hkmf-ice);
+}
+
+.hkmf-bdrow:focus-visible {
+  outline: 2px solid var(--hkmf-link);
+  outline-offset: -2px;
+}
+
+.hkmf-bdcaret {
+  display: inline-block;
+  width: 12px;
+  color: var(--hkmf-faint);
+}
+
+.hkmf-bdname {
+  overflow-wrap: anywhere;
+}
+
+.hkmf-lndetail[hidden] {
+  display: none !important;
+}
+
+/* 明細セルは金額列の右寄せ・nowrapを引き継がないよう打ち消す */
+.hkmf-bdtable td.hkmf-lncell {
+  width: auto;
+  padding: 0 0 8px 12px;
+  border-top: none;
+  text-align: left;
+  white-space: normal;
+  font-variant-numeric: normal;
+}
+
+.hkmf-lnhead {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0 6px;
+}
+
+.hkmf-lncount {
+  flex: none;
+  color: var(--hkmf-faint);
+}
+
+.hkmf-lnlink {
+  color: var(--hkmf-link);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hkmf-lnlink:hover {
+  text-decoration: underline;
+}
+
+.hkmf-tabs .hkmf-lnlink {
+  margin-left: auto;
+  align-self: center;
+}
+
+.hkmf-lnlist {
+  border-top: 1px solid var(--hkmf-hairline-soft);
+}
+
+.hkmf-lnrow {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--hkmf-hairline-soft);
+}
+
+.hkmf-lntop {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.hkmf-lndate {
+  flex: none;
+  color: var(--hkmf-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 日付は「その日の元帳」へのリンクなのでリンク色にする */
+a.hkmf-lndate {
+  color: var(--hkmf-link);
+}
+
+.hkmf-lncorr {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hkmf-lnamount {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.hkmf-lndesc {
+  margin-top: 1px;
+  color: var(--hkmf-sub);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hkmf-bdtotal td {
+  border-top: 1px solid var(--hkmf-hairline);
+  font-weight: 600;
+}
+
+.hkmf-status {
+  margin: 0;
+  color: var(--hkmf-sub);
+  font-size: 14px;
+}
+
+/* ===== フッター ===== */
+.hkmf-foot {
+  flex: none;
+  padding: 8px 14px;
+  border-top: 1px solid var(--hkmf-hairline);
+  background: var(--hkmf-surface);
+  color: var(--hkmf-faint);
+  font-size: 14px;
+}

@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "MF BSサイドドロワー",
+  "version": "0.1.0",
+  "description": "マネーフォワード クラウド会計の「連携サービスから入力」画面（明細一覧・ビジネスカテゴリの両方）の右側に、消し込み対象のBS残高（営業債権・営業債務・借入金）をスライド表示します。科目行を開くと総勘定元帳から取引先別・補助科目別の内訳を集計し、内訳行をさらに開くと元帳の明細まで確認できます。読み取り（GET）専用で、MFへの書き込みは一切行いません。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://accounting.moneyforward.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://accounting.moneyforward.com/journalable_dists*",
+        "https://accounting.moneyforward.com/transaction_journals*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "drawer.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "freee BSサイドドロワー",
+  "version": "0.5.0",
+  "description": "freee会計の「自動で経理」画面の右側に、消し込み対象のBS残高（営業債権・営業債務・借入金）をスライド表示します。科目行を開くと元帳から取引先別・品目別の内訳を集計し、内訳行をさらに開くと元帳の明細まで確認できます。読み取り（GET）専用で、freeeへの書き込みは一切行いません。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://secure.freee.co.jp/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://secure.freee.co.jp/reports/trial_balance_sheet*",
+        "https://secure.freee.co.jp/reports/trial_profit_and_loss*"
+      ],
+      "js": [
+        "capture.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://secure.freee.co.jp/wallet_txns*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "drawer.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
