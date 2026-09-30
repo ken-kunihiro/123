@@ -1,5 +1,6 @@
 // MF会計「連携サービスから入力」科目ボタンパネル＋「これ、何費？」検索
-// 対応ページ: /transaction_journals（通帳・カード他）, /journalable_dists（ビジネスカテゴリ）
+// 対応ページ: /transaction_journals（通帳・カード他）, /journalable_dists（ビジネスカテゴリ）,
+//             /voucher_journals（AI-OCRから入力＝クラウドBoxの証憑からの仕訳候補）
 //
 // 使い方:
 //   1. 明細行の勘定科目ボタンをクリック（ドロップダウンが開く）
@@ -102,7 +103,11 @@
       if (!(e.target instanceof Element)) return;
       if (e.target.closest('#' + PANEL_ID)) return;
       const accBtn = e.target.closest(
-        'td[class*="colLedgerAccount"] button, td[class*="itemAndSubItem"] button'
+        'td[class*="colLedgerAccount"] button, td[class*="itemAndSubItem"] button,' +
+        // AI-OCRから入力（/voucher_journals）の詳細パネル。
+        // 借方/貸方それぞれ[科目・補助・取引先・税区分・インボイス]が同じクラスのボタンで並ぶ。
+        // どれを押しても記録し、科目以外を開いていた場合は候補なしのtoastで止まる。
+        ' button[class*="selectedChoiceLabel"]'
       );
       if (accBtn) {
         lastAccountBtn = accBtn;
@@ -115,27 +120,304 @@
     true
   );
 
+  // 長めの待ちはビジーループにせず間隔をあけて見にいく（リロード直後の復帰待ち用）
+  async function waitSlow(fn, timeoutMs, intervalMs) {
+    const t0 = performance.now();
+    let v = fn();
+    while (!v && performance.now() - t0 < timeoutMs) {
+      await new Promise((r) => setTimeout(r, intervalMs || 150));
+      v = fn();
+    }
+    return v;
+  }
+
   // ---- 科目選択 ----
-  async function applyKamoku(name, uiBtn) {
+  // silent: 自動選択（リロード後の復帰処理）から呼ぶとき。失敗のtoastは呼び元がまとめて出す
+  async function applyKamoku(name, uiBtn, silent) {
     let list = openList();
     if (!list && lastAccountBtn && lastAccountBtn.isConnected) {
       lastAccountBtn.click();
       list = await waitFor(openList, 2500);
     }
     if (!list) {
-      toast('先に明細行の勘定科目ボタンをクリックしてね');
-      return;
+      if (!silent) toast('先に明細行の勘定科目ボタンをクリックしてね');
+      return false;
     }
     const items = [...list.children].filter((el) => /isSelectable/.test(el.className));
     const item =
       items.find((el) => el.textContent.trim() === name) ||
       items.find((el) => el.textContent.trim().startsWith(name));
     if (!item) {
-      toast('候補が見つからないよ（科目名を確認してね）');
-      return;
+      if (!silent) toast('候補が見つからないよ（科目名を確認してね）');
+      return false;
     }
     item.click();
     if (uiBtn) flash(uiBtn);
+    return true;
+  }
+
+  // ---- 補助科目・取引先のワンクリック追加（/voucher_journals 向け） ----
+  //
+  // MFはマスター（勘定科目・補助科目・取引先）をページ読み込み時の
+  // GET /api/v1/journals/configurations で一括配信し、ドロップダウンはそのクライアント
+  // キャッシュだけを見ている。ドロップダウンを開いてもAPIを叩かず、詳細パネルを開き直しても
+  // 再fetchしないため、「リロードなしで新しい補助科目を出す」ことはMF側の実装上できない。
+  // そこで作成→リロード→詳細パネル復帰→自動選択までを拡張が肩代わりして、
+  // 「マスター画面へ移動→新規作成→戻って再読み込み」の往復をボタン1回に畳む。
+  // 仕訳候補自体はサーバー側のデータなので、リロードしても手を入れていない限り元に戻る。
+
+  let cfgCache = null;
+
+  function ctiQuery() {
+    const cti = new URLSearchParams(location.search).get('cti');
+    return cti ? '?cti=' + encodeURIComponent(cti) : '';
+  }
+
+  async function getConfig(force) {
+    if (cfgCache && !force) return cfgCache;
+    const res = await fetch('/api/v1/journals/configurations' + ctiQuery(), {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) throw new Error('configurations ' + res.status);
+    cfgCache = await res.json();
+    return cfgCache;
+  }
+
+  const allItems = (cfg) => (cfg.itemGroups || []).flatMap((g) => g.items || []);
+
+  // 詳細パネルの科目系ボタン。借方・貸方それぞれ
+  // [0]勘定科目 [1]補助科目 [2]取引先 [3]税区分 [4]インボイス の5個1組で並ぶ。
+  const detailButtons = () => [...document.querySelectorAll('button[class*="selectedChoiceLabel"]')];
+  const OFFSET = { sub: 1, partner: 2 };
+  const groupBtn = (g, offset) => detailButtons()[g * 5 + offset] || null;
+
+  // 「いま何の勘定科目を触っているか」を、最後にクリックしたボタンから逆算する。
+  // 組の先頭（勘定科目ボタン）と、押したボタン自身の両方をマスターと突き合わせ、
+  // 実在する科目名に一致したものだけを採用する（税区分などを掴んでいたら null）。
+  // 戻り値は { item, group }。group は詳細パネルの何組目か（借方=0/貸方=1…、不明なら -1）。
+  async function currentItem() {
+    const cfg = await getConfig();
+    const items = allItems(cfg);
+    const cands = [];
+    const btns = detailButtons();
+    const idx = btns.indexOf(lastAccountBtn);
+    const group = idx >= 0 ? Math.floor(idx / 5) : -1;
+    if (group >= 0) cands.push(btns[group * 5]);
+    if (lastAccountBtn && lastAccountBtn.isConnected) cands.push(lastAccountBtn);
+    if (lastRow && lastRow.isConnected) {
+      cands.push(lastRow.querySelector('td[class*="colLedgerAccount"] button'));
+    }
+    for (const b of cands) {
+      if (!b) continue;
+      const hit = items.find((i) => i.label === b.textContent.trim());
+      if (hit) return { item: hit, group };
+    }
+    return null;
+  }
+
+  const csrfToken = () => {
+    const m = document.querySelector('meta[name="csrf-token"]');
+    return m ? m.content : '';
+  };
+
+  async function postForm(path, params) {
+    const body = new URLSearchParams();
+    body.set('authenticity_token', csrfToken());
+    for (const [k, v] of Object.entries(params)) body.set(k, v);
+    return fetch(path + ctiQuery(), {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With': 'XMLHttpRequest',
+        Accept: 'text/javascript, application/javascript, text/html, */*',
+      },
+      body: body.toString(),
+    });
+  }
+
+  // MFはPOSTの成否をレスポンス本文（JS片やHTML）でしか返さないので、
+  // マスターを取り直して実在を確かめる方式で成否を判定する。
+  async function existsAfterPost(check) {
+    const cfg = await getConfig(true);
+    return check(cfg);
+  }
+
+  // 作成できたら、どのボタンに何を入れ直すかを控えてリロードする。
+  // リロード後はURLのuuidで同じ明細の詳細パネルが復帰するので、そこで自動選択する。
+  function reloadWithPending(p) {
+    p.ts = Date.now();
+    // saveSettingsはlocalStorageミラーにも同期で書くので、リロード前でも確実に残る
+    saveSettings({ mfkbPending: p });
+    location.reload();
+  }
+
+  async function createSubItem() {
+    let cur;
+    try {
+      cur = await currentItem();
+    } catch (e) {
+      toast('マスターを取得できなかったよ');
+      return;
+    }
+    if (!cur) {
+      toast('先に勘定科目ボタンをクリックしてね');
+      return;
+    }
+    const item = cur.item;
+    const name = (prompt('「' + item.label + '」に追加する補助科目名') || '').trim();
+    if (!name) return;
+    if ((item.subItems || []).some((s) => s.label === name)) {
+      toast('その補助科目はもうあるよ');
+      return;
+    }
+    if (!confirm('「' + item.label + ' / ' + name + '」を作成して画面を読み込み直すよ。\n入力中に手で直した内容は失われるけど、続ける？')) return;
+
+    const cfg = await getConfig();
+    // 補助科目の税区分は親科目と同じにする。「不明」で作ると、その補助科目を選んだ瞬間に
+    // 仕訳側の税区分まで「不明」に書き換わってしまう（2026-09-01 実測。
+    // 既存の補助科目はいずれも親科目と同じ税区分で作られている）。
+    const ex = (cfg.excises || []).find((e) => e.id === item.defaultExciseId);
+    if (!ex) {
+      toast('「' + item.label + '」の税区分が取れなかったよ');
+      return;
+    }
+    try {
+      await postForm('/sub_items', {
+        'sub_item[item_id]': String(item.plainId),
+        'sub_item[name]': name,
+        'sub_item[excise_id]': String(ex.plainId),
+        'sub_item[code]': '',
+      });
+    } catch (e) {
+      toast('作成に失敗したよ（通信エラー）');
+      return;
+    }
+    const ok = await existsAfterPost((c) =>
+      (allItems(c).find((i) => i.plainId === item.plainId)?.subItems || []).some((s) => s.label === name)
+    );
+    if (!ok) {
+      toast('作成できなかったよ。勘定科目マスターを確認してね');
+      return;
+    }
+    reloadWithPending({ kind: 'sub', name, itemLabel: item.label, group: cur.group });
+  }
+
+  async function createTradePartner() {
+    let cur;
+    try {
+      cur = await currentItem();
+    } catch (e) {
+      toast('マスターを取得できなかったよ');
+      return;
+    }
+    if (!cur) {
+      toast('先に勘定科目ボタンをクリックしてね');
+      return;
+    }
+    const item = cur.item;
+    const cfg = await getConfig();
+    const name = (prompt('追加する取引先名') || '').trim();
+    if (!name) return;
+    if ((cfg.tradePartners || []).some((t) => t.label === name)) {
+      toast('その取引先はもうあるよ');
+      return;
+    }
+    // 登録番号なしで作るとMF側で「2023-10-01以降は非適格」扱いになり、
+    // その取引先を選んだ仕訳の控除計算に効いてしまうので、ここで入れられるようにする。
+    const inv = (prompt('「' + name + '」のインボイス登録番号（T+13桁）\n登録がなければ空のままOK') || '')
+      .trim()
+      .toUpperCase()
+      .replace(/[\s-]/g, '');
+    if (inv && !/^T\d{13}$/.test(inv)) {
+      toast('登録番号はT＋13桁で入れてね');
+      return;
+    }
+    if (
+      !confirm(
+        '取引先「' + name + '」' + (inv ? '（' + inv + '）' : '（インボイス登録番号なし＝非適格扱い）') +
+          'を作成して画面を読み込み直すよ。\n入力中に手で直した内容は失われるけど、続ける？'
+      )
+    )
+      return;
+
+    const K = 'trade_partner_form[trade_partner]';
+    try {
+      await postForm('/trade_partners', {
+        [K + '[name]']: name,
+        [K + '[name_for_search]']: name,
+        [K + '[invoice_registration_number]']: inv,
+        [K + '[corporate_number]']: '',
+        [K + '[is_active]']: '1',
+      });
+    } catch (e) {
+      toast('作成に失敗したよ（通信エラー）');
+      return;
+    }
+    const ok = await existsAfterPost((c) => (c.tradePartners || []).some((t) => t.label === name));
+    if (!ok) {
+      toast('作成できなかったよ。取引先マスターを確認してね');
+      return;
+    }
+    reloadWithPending({ kind: 'partner', name, itemLabel: item.label, group: cur.group });
+  }
+
+  // 指定した組のボタンを開いて name を選び、ラベルに反映されるまで待つ
+  async function pickInGroup(g, offset, name) {
+    // 直前のドロップダウンが残っていると別の欄のリストを掴んでしまうので閉じるのを待つ
+    await waitSlow(() => (openList() ? null : true), 2000, 80);
+    const btn = groupBtn(g, offset);
+    if (!btn) return false;
+    lastAccountBtn = btn;
+    if (!(await applyKamoku(name, null, true))) return false;
+    const ok = await waitSlow(() => {
+      const b = groupBtn(g, offset);
+      if (!b) return null;
+      const t = b.textContent.trim();
+      return t === name || t.startsWith(name) ? true : null;
+    }, 3000, 80);
+    return !!ok;
+  }
+
+  // リロード後: 控えた組の勘定科目を選び直してから、作った補助科目／取引先を選ぶ。
+  // リロードで仕訳候補はサーバー側の値に戻るため、科目もこちらで入れ直さないと
+  // 「科目＋補助科目」がそろわない（2026-09-01 けんとさん指示）。
+  async function applyPending(p) {
+    const label = p.kind === 'sub' ? '補助科目' : '取引先';
+    const giveUp = (what) => toast('「' + p.name + '」を作ったよ（' + what + 'は手で選んでね）');
+    const has = typeof p.group === 'number' && p.group >= 0;
+
+    // 詳細パネルの復帰待ち。リロード直後はボタンだけ先に並んでラベルが後から入るので、
+    // 「控えた勘定科目のラベルが出そろう」ことを合図にする（サーバー側の値が戻ってくる）。
+    // 0を偽値にしないため、組番号は +1 して返す。
+    let g = await waitSlow(() => {
+      const b = detailButtons();
+      if (b.length < 5) return null;
+      const at = (i) => (b[i] ? b[i].textContent.trim() : '');
+      if (has && b.length > p.group * 5 + 4 && at(p.group * 5) === p.itemLabel) return p.group + 1;
+      for (let i = 0; i < b.length; i += 5) if (at(i) === p.itemLabel) return i / 5 + 1;
+      return null;
+    }, 20000, 200);
+
+    if (g) {
+      g -= 1; // 科目はリロードで戻っている。触らずに②へ
+    } else {
+      // 科目が戻ってこなかった（手で変えた科目だった等）。控えた組に自分で入れ直す
+      const b = detailButtons();
+      if (!has || b.length <= p.group * 5 + 4) return giveUp(label);
+      g = p.group;
+      if (!(await pickInGroup(g, 0, p.itemLabel))) return giveUp('勘定科目と' + label);
+    }
+
+    // ② 補助科目／取引先。初期化直後は取りこぼすことがあるので一度だけやり直す
+    let ok = await pickInGroup(g, OFFSET[p.kind], p.name);
+    if (!ok) {
+      await new Promise((r) => setTimeout(r, 800));
+      ok = await pickInGroup(g, OFFSET[p.kind], p.name);
+    }
+    if (!ok) return giveUp(label);
+    toast('「' + p.itemLabel + ' / ' + p.name + '」を選んだよ');
   }
 
   // ---- なんぴ検索 ----
@@ -163,12 +445,28 @@
     return out;
   }
 
+  // 摘要のテキストを取る。
+  // 連携サービスから入力: 行内の colRemarkArea textarea。
+  // AI-OCRから入力の詳細パネル: colRemarkArea が無く、パネル内に摘要textareaが並ぶだけなので、
+  //   最後に触った科目ボタンから祖先を上へ辿り、値の入ったtextareaを最初に見つけた時点で採用する。
+  function remarkText() {
+    if (lastRow && lastRow.isConnected) {
+      const ta = lastRow.querySelector('td[class*="colRemarkArea"] textarea');
+      if (ta && ta.value) return ta.value;
+    }
+    let scope = lastAccountBtn && lastAccountBtn.isConnected ? lastAccountBtn.parentElement : null;
+    while (scope && scope !== document.body) {
+      const ta = [...scope.querySelectorAll('textarea')].find((t) => t.value && t.value.trim());
+      if (ta) return ta.value;
+      scope = scope.parentElement;
+    }
+    return '';
+  }
+
   // 摘要から検索語の候補を抽出（例:「ﾄﾘﾀｹｿｳﾎﾝﾃﾝ/NFC（TORITAKE SOHONTEN）」→「トリタケソウホンテン」）
   function nanpiCandidate() {
-    if (!lastRow || !lastRow.isConnected) return '';
-    const ta = lastRow.querySelector('td[class*="colRemarkArea"] textarea');
-    if (!ta || !ta.value) return '';
-    let t = ta.value;
+    let t = remarkText();
+    if (!t) return '';
     // 全角英数・記号→半角
     t = t.replace(/[Ａ-Ｚａ-ｚ０-９．＊／]/g, (c) =>
       String.fromCharCode(c.charCodeAt(0) - 0xfee0)
@@ -313,8 +611,35 @@
     body.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;padding:8px;';
     buildButtons(body);
 
+    // マスター追加行（補助科目・取引先をその場で作る）
+    const master = document.createElement('div');
+    master.style.cssText =
+      'display:flex;gap:6px;padding:0 8px 8px;border-top:1px solid #eee;margin-top:2px;padding-top:8px;';
+    for (const [text, title, fn] of [
+      ['＋補助科目', '選択中の勘定科目に補助科目を追加して選択する（画面を読み込み直すよ）', createSubItem],
+      ['＋取引先', '取引先を追加して選択する（画面を読み込み直すよ）', createTradePartner],
+    ]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = text;
+      b.title = title;
+      b.style.cssText =
+        'flex:1;padding:5px 6px;border:1px solid #999;border-radius:4px;background:#fafafa;color:#333;' +
+        'cursor:pointer;font-size:12px;white-space:nowrap;';
+      b.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fn();
+      });
+      master.appendChild(b);
+    }
+
     const applyCollapsed = () => {
       body.style.display = collapsed ? 'none' : 'flex';
+      master.style.display = collapsed ? 'none' : 'flex';
       collapseBtn.textContent = collapsed ? '＋' : '−';
       collapseBtn.title = collapsed ? '展開' : '折りたたみ';
     };
@@ -326,7 +651,7 @@
       saveSettings({ mfkbCollapsed: collapsed });
     });
 
-    panel.append(header, body);
+    panel.append(header, body, master);
     document.documentElement.appendChild(panel);
 
     // 保存位置の復元
@@ -367,7 +692,7 @@
   // ---- 起動 ----
   // chrome.storageを正、localStorageミラーを副として読む。
   // chrome.storage側が空（拡張入れ直し直後など）ならミラーから復元して書き戻す。
-  storage.get(['mfkbKamoku', 'mfkbPos', 'mfkbCollapsed'], (data) => {
+  storage.get(['mfkbKamoku', 'mfkbPos', 'mfkbCollapsed', 'mfkbPending'], (data) => {
     const mirror = mirrorRead();
     let restored = false;
     if (Array.isArray(data.mfkbKamoku) && data.mfkbKamoku.length) {
@@ -379,7 +704,32 @@
     panelPos = data.mfkbPos || mirror.mfkbPos || null;
     collapsed = data.mfkbCollapsed !== undefined ? !!data.mfkbCollapsed : !!mirror.mfkbCollapsed;
     if (restored) storage.set({ mfkbKamoku: kamokuList });
+    // popupでの保存はMFタブが開いていないとミラーに届かない。起動のたびに正→副へ揃えておく
+    else mirrorWrite({ mfkbKamoku: kamokuList });
+    // 設定を読む前にパネルが作られていたら（下のMutationObserverが先に走った場合）捨てて作り直す。
+    // 残したままだとデフォルトの科目リスト・既定位置のまま固定されてしまう（2026-09-01 けんとさん報告）
+    const stale = document.getElementById(PANEL_ID);
+    if (stale) stale.remove();
     injectPanel();
+
+    // マスター追加によるリロード直後なら、作った補助科目／取引先を選び直す。
+    // 控えは必ず消してから走らせる（失敗しても次のリロードで蒸し返さないため）。
+    const pending = mirrorRead().mfkbPending || data.mfkbPending;
+    if (pending && pending.name && Date.now() - (pending.ts || 0) < 120000) {
+      saveSettings({ mfkbPending: null });
+      applyPending(pending).catch(() => toast('「' + pending.name + '」を作ったよ（選択は手でお願い）'));
+    } else if (pending) {
+      saveSettings({ mfkbPending: null });
+    }
+
+    // Reactの再レンダリングでパネルが消えたら差し直す。
+    // 設定の読み込みが終わってから見張り始める（先に走らせるとデフォルトのままのパネルを作ってしまう）。
+    // ここで例外を出すと起動処理ごと落ちるので包む
+    try {
+      new MutationObserver(() => {
+        if (!document.getElementById(PANEL_ID)) injectPanel();
+      }).observe(document.body || document.documentElement, { childList: true, subtree: true });
+    } catch (e) {}
   });
 
   // popupで科目リストが保存されたら即反映
@@ -396,8 +746,4 @@
     });
   }
 
-  // Reactの再レンダリングでパネルが消えたら差し直す
-  new MutationObserver(() => {
-    if (!document.getElementById(PANEL_ID)) injectPanel();
-  }).observe(document.body, { childList: true, subtree: true });
 })();

@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "MF帳簿点検ハイライト",
+  "version": "0.1.0",
+  "description": "マネーフォワード クラウド会計の総勘定元帳・補助元帳・残高試算表・推移表で、マイナス金額・取引先／補助科目の未選択・消費税区分の疑い・消耗品費／修繕費の高額・残高の逆向き・トレンド崩れ・固定費のブレを自動でハイライトします。確認済みの指摘はメモを付けて色を消せます。読み取り（GET）専用で、MFへの書き込みは一切行いません。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://accounting.moneyforward.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://accounting.moneyforward.com/books/general_ledger*",
+        "https://accounting.moneyforward.com/books/subsidiary_ledger*",
+        "https://accounting.moneyforward.com/balance_books/tb*"
+      ],
+      "css": [
+        "src/styles.css"
+      ],
+      "js": [
+        "src/rules.js",
+        "src/store.js",
+        "src/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
